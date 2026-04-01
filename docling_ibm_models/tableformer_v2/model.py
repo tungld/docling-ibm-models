@@ -760,7 +760,9 @@ class TableFormerV2(PreTrainedModel, GenerationMixin):
         # Identify cell positions and predict bboxes
         cell_mask = torch.zeros_like(input_ids, dtype=torch.bool)
         for cell_id in self.data_cells:
-            cell_mask |= input_ids == cell_id
+            # cell_mask |= input_ids == cell_id
+            # onnx friendly ops.
+            cell_mask = cell_mask | (input_ids == cell_id)
 
         cell_positions = torch.nonzero(cell_mask, as_tuple=False)
         cell_embeddings = decoded[cell_mask]
