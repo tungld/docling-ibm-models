@@ -217,35 +217,88 @@ def test_tableformer_v2_forward_pass(init: dict):
 
         # Create dummy input_ids (start token)
         input_ids = torch.tensor([[tokenizer.bos_token_id]], device=device)
+        pad_token_id = 0
+        attention_mask = input_ids != pad_token_id
 
         with torch.no_grad():
             outputs = model.forward(
                 images=image_tensor,
                 input_ids=input_ids,
+                attention_mask=attention_mask,
                 return_dict=True
             )
-            import inspect
-            print(inspect.signature(model.forward))
-            
-            # torch.onnx.export(
-            #     model,
-            #     (image_tensor, input_ids),   # positional args ONLY
-            #     "model.onnx",
-            #     do_constant_folding=True,
-            #     input_names=["images", "input_ids"],
-            #     output_names=["output"],
-            #     dynamic_axes={
-            #         "images": {0: "batch"},
-            #         "input_ids": {0: "batch", 1: "seq_len"},
-            #         "output": {0: "batch"},
-            #     },
-            # )
-            
 
         assert outputs.logits is not None, "Missing logits"
         assert outputs.hidden_states is not None, "Missing hidden_states"
         assert outputs.logits.size(-1) == model.config.vocab_size, "Wrong vocab size in logits"
 
+
+def test_tableformer_v2_forward_pass_export_to_onnx(init: dict):
+    r"""
+    Test forward pass functionality on cropped table
+    """
+    device = "cpu"
+
+    model = TableFormerV2.from_pretrained(
+        init["artifact_path"], revision=init["artifact_revision"]
+    )
+    tokenizer = load_tokenizer(init["artifact_path"], revision=init["artifact_revision"])
+    model = model.to(device)
+    model.eval()
+
+    # Prepare transform
+    transform = transforms.Compose([
+        transforms.Resize((init["image_size"], init["image_size"])),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+
+    # Test with first table crop
+    img_fn = init["test_data"]["png_images"][0]
+    table_bbox = init["test_data"]["table_bboxes"][0][0]
+    
+    with Image.open(img_fn) as img:
+        img_rgb = img.convert("RGB")
+        x1, y1, x2, y2 = table_bbox
+        table_crop = img_rgb.crop((x1, y1, x2, y2))
+        image_tensor = transform(table_crop).unsqueeze(0).to(device)
+
+        # Create dummy input_ids (start token)
+        input_ids = torch.tensor([[tokenizer.bos_token_id]], device=device)
+        pad_token_id = 0
+        attention_mask = input_ids != pad_token_id
+
+        with torch.no_grad():
+            outputs = model.forward(
+                images=image_tensor,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                return_dict=True
+            )
+            print("images", image_tensor.shape) # torch.Size([1, 3, 448, 448])
+            print("input_ids", input_ids.shape) # torch.Size([1, 1])
+            import inspect
+            print(inspect.signature(model.forward))
+            # export to onnx
+            torch.onnx.export(
+                model,
+                (image_tensor, input_ids, attention_mask),   # positional args ONLY
+                "tableformer_v2.onnx",
+                opset_version=18,
+                do_constant_folding=True,
+                input_names=["images", "input_ids", "attention_mask"],
+                dynamic_axes={
+                    "images": {0: "batch"},
+                    "input_ids": {0: "batch", 1: "seq_len"},
+                    "attention_mask": {0: "batch", 1: "seq_len"},
+                },
+                dynamo=False
+            )
+            
+
+        assert outputs.logits is not None, "Missing logits"
+        assert outputs.hidden_states is not None, "Missing hidden_states"
+        assert outputs.logits.size(-1) == model.config.vocab_size, "Wrong vocab size in logits"
 
 def test_tableformer_v2_predict(init: dict):
     r"""
@@ -547,5 +600,4 @@ def test_tableformer_v2_unsupported_input(init: dict):
 
 if __name__ == '__main__':
     dict = init()
-    #test_tableformer_v2_model_loading(dict)
-    test_tableformer_v2_forward_pass(dict)
+    test_tableformer_v2_forward_pass_export_to_onnx(dict)
