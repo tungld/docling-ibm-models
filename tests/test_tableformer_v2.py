@@ -16,6 +16,13 @@ from docling_ibm_models.tableformer.utils.app_profiler import AggProfiler
 TABLEFORMER_V2_REPO_ID = "docling-project/TableFormerV2"
 TABLEFORMER_V2_REVISION = "v0.1.0"
 
+# DLC
+import torch_onnxmlir
+import logging
+# logging.basicConfig(level=logging.INFO)  # Or INFO, WARNING, etc.
+# torch_onnxmlir.config.session_cache_limit = 200
+# torch_onnxmlir.config.same_hash_size = 0
+
 def load_tokenizer(path: str, revision: str | None = None):
     """Load tokenizer from local path or HuggingFace repo."""
     import os
@@ -76,7 +83,7 @@ test_config = {
 }
 
 
-@pytest.fixture(scope="module")
+#@pytest.fixture(scope="module")
 def init() -> dict:
     r"""
     Initialize the testing environment
@@ -209,6 +216,19 @@ def test_tableformer_v2_forward_pass(init: dict):
     img_fn = init["test_data"]["png_images"][0]
     table_bbox = init["test_data"]["table_bboxes"][0][0]
     
+    # Compile using DLC.
+    om_options = {
+        "compiler_image_name": None,
+        "compile_options": "-O3 -march=z17 -maccel=NNPA --printONNXBasicIR=10 -v --onnx-op-stats TXT",
+        "compiler_path": "/workdir/onnx-mlir/build/Debug/bin/onnx-mlir",
+    }
+    model.forward = torch.compile(
+        model.forward,
+        backend="onnxmlir",
+        options=om_options,
+        dynamic=False,
+    )
+
     with Image.open(img_fn) as img:
         img_rgb = img.convert("RGB")
         x1, y1, x2, y2 = table_bbox
@@ -249,6 +269,19 @@ def test_tableformer_v2_predict(init: dict):
     tokenizer = load_tokenizer(init["artifact_path"], revision=init["artifact_revision"])
     model = model.to(device)
     model.eval()
+
+    # Compile using DLC.
+    om_options = {
+        "compiler_image_name": None,
+        "compile_options": "-O3 -march=z17 -maccel=NNPA --printONNXBasicIR=10 -v --onnx-op-stats TXT",
+        "compiler_path": "/workdir/onnx-mlir/build/Debug/bin/onnx-mlir",
+    }
+    model.forward = torch.compile(
+        model.forward,
+        backend="onnxmlir",
+        options=om_options,
+        dynamic=False,
+    )
 
     # Prepare transform
     transform = transforms.Compose([
@@ -527,3 +560,8 @@ def test_tableformer_v2_unsupported_input(init: dict):
     except Exception:
         is_exception = True
     assert is_exception, "Should raise exception for wrong input shape"
+
+if __name__ == '__main__':
+    dict = init()
+    # test_tableformer_v2_forward_pass(dict)
+    test_tableformer_v2_predict(dict)
